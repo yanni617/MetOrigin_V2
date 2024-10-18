@@ -1,0 +1,583 @@
+---
+title: "Figure3"
+output: html_document
+date: "2024-10-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+## Figure 3A
+```{r }
+
+setwd("/home/xcfang/Software/metorigin2/code4imeta/Figure3")
+
+color_opacity <- function(col,alpha=0.5){
+  library(gplots)
+  sapply(col, function(x){
+    colorRampPalette(c("white",x))(10)[round(alpha*10)]
+  }) %>% as.character
+}
+
+SplitDupData <- function(data,column,pat){
+  for(cc in column){
+    if(length(grep(pat,data[,cc]))>0){
+      split_list <- strsplit(data[,cc],pat)
+      new_index <- rep(1:nrow(data),sapply(split_list,length))
+      data <- data[new_index,]
+      data[,cc] <- unlist(split_list)
+      row.names(data) <- NULL
+    }
+  }
+  return(data)
+}
+
+Plot_KEGGPathway_Network <- function(Reaction,KO_stat,CPD_stat,Title=NULL,
+                                     Enzyme2KO,EnzymeName,KONames,KEGGID2CPDName){
+  NodeShape <- structure(c("ellipse","box","square"), 
+                         names = c("Compound","Enzyme","Orthology"))
+  Grey <- "#DCDCDC"
+  DarkGrey <- "#A9A9A9"
+  
+  Reaction$Enzyme <- as.character(1:nrow(Reaction))
+  Reaction$KO <- sapply(Reaction$GeneEntry,function(ec) paste(unique(unlist(Enzyme2KO[ec])),collapse = "; "))
+  Reaction$KO[Reaction$KO==""] <- NA
+  exists_enzyme <- Reaction$Enzyme[sapply(strsplit(Reaction$KO,"; "), function(k) 
+    length(intersect(k,KO_stat$ID))>0)] %>% unique
+  
+  Data <- SplitDupData(data = Reaction[,-1],column = c("SubstrateName","ProductName","KO"),pat = "; ")
+  Data$color <- DarkGrey
+  exists_reaction <- which(Data$SubstrateName %in% CPD_stat$KEGGID +
+                             Data$ProductName %in% CPD_stat$KEGGID +
+                             Data$Enzyme %in% exists_enzyme==3)
+  if(length(exists_reaction)>0){
+    Data$color[exists_reaction] <- "black"
+    ExistsReaction <- Data[exists_reaction,]
+  }else{
+    ExistsReaction <- NULL
+  }
+  
+  edges <- rbind(data.frame(from=Data$SubstrateName,
+                            to=Data$Enzyme,
+                            arrows=ifelse(Data$ReactionType=="irreversible","none","from"),
+                            color=Data$color),
+                 data.frame(from=Data$Enzyme,
+                            to=Data$ProductName,
+                            arrows="to",
+                            color=Data$color),
+                 na.omit(data.frame(from=Data$Enzyme,
+                                    to=Data$KO,
+                                    arrows="none",
+                                    color=DarkGrey))) %>% unique
+  edges$dashes <- F
+  edges$length <- 200
+  edges$width <- 2
+  edges$dashes[grep("^K",edges$to)] <- T
+  edges$length[grep("^K",edges$to)] <- 50
+  edges$width[grep("^K",edges$to)] <- 1
+  
+  AllNodes <- unique(c(edges$from,edges$to))
+  IDs <- structure(1:length(AllNodes),names=AllNodes)
+  edges$from <- IDs[edges$from]
+  edges$to <- IDs[edges$to]
+  
+  cpd_stat <- subset(CPD_stat,KEGGID %in% AllNodes)
+  ko_stat <- subset(KO_stat,ID %in% Data$KO)
+  nodes <- data.frame(id = 1:length(AllNodes),
+                      size = 20,
+                      title = AllNodes,
+                      label = AllNodes,
+                      group = "Enzyme",
+                      borderWidth = 1.5,
+                      color.background = ifelse(AllNodes %in% exists_enzyme,DarkGrey,Grey),
+                      font = "20px arial black",
+                      row.names = AllNodes)
+  
+  nodes$group[grep("^[CDG]",nodes$label)] <- "Compound"
+  nodes$group[grep("^K",nodes$label)] <- "Orthology"
+  nodes$shape <- NodeShape[nodes$group]
+  
+  index <- tapply(1:nrow(nodes), nodes$group, c)
+  nodes$label[index$Compound] <- KEGGID2CPDName[nodes$label[index$Compound]]
+  nodes$title[index$Compound] <- paste0(nodes$title[index$Compound]," (",nodes$label[index$Compound],")")
+  nodes[cpd_stat$KEGGID,"label"] <- cpd_stat$Name
+  nodes$label[index$Enzyme] <- Reaction$GeneEntry[as.numeric(nodes$label[index$Enzyme])]
+  nodes$title[index$Enzyme] <- EnzymeName[nodes$label[index$Enzyme]]
+  nodes$title[index$Orthology] <- KONames[nodes$title[index$Orthology]]
+  
+  nodes$shape[nodes$group=="Compound"] <- "ellipse"
+  nodes$shape[nodes$group=="Orthology"] <- "square"
+  nodes$size[nodes$group=="Orthology"] <- 10
+  
+  nodes[c(cpd_stat$KEGGID,ko_stat$ID),"color.background"] <- c(cpd_stat$Color,ko_stat$Color)
+  nodes$color.border <- nodes$color.background
+  nodes[c(cpd_stat$KEGGID[cpd_stat$Sig],ko_stat$ID[ko_stat$Sig]),"color.border"] <- "black"
+  
+  library(visNetwork)
+  html <- visNetwork(nodes = nodes,edges = edges,
+                     width = 1000,height = 1000,
+                     main = list(text=Title,
+                                 style="font-family:arial;font-size:20px;text-align:center;")) %>%
+    visIgraphLayout(randomSeed = 1, layout = "layout_with_graphopt") %>%
+    visOptions(highlightNearest = list(enabled =TRUE, degree = 1)) %>%
+    visInteraction(dragView = T)  %>% visLegend()
+  
+  
+  for(G in names(NodeShape)){
+    html <- html %>% visGroups(groupname = G, 
+                               shape = as.character(NodeShape[G]),
+                               color = Grey,
+                               size = 10) 
+  }
+  
+  return(list(html=html,ExistsReaction=ExistsReaction,KO=unique(ko_stat$ID)))
+}
+
+library(openxlsx)
+library(magrittr)
+
+load("Enzyme2KO.RData")
+load("EnzymeName.RData")
+load("KONames.RData")
+load("KEGGID2CPDName.RData")
+
+Reaction <- read.xlsx("Figure3_A_data1.xlsx")
+KO <- read.xlsx("Figure3_A_data2.xlsx")
+Meta <- read.xlsx("Figure3_A_data3.xlsx")
+
+reList <- Plot_KEGGPathway_Network(Reaction = Reaction,
+                                   KO_stat = KO,
+                                   CPD_stat = Meta,
+                                   Title = "ko00360: Phenylalanine metabolism",
+                                   Enzyme2KO = Enzyme2KO,
+                                   EnzymeName = EnzymeName,
+                                   KONames = KONames,
+                                   KEGGID2CPDName = KEGGID2CPDName)
+reList$html
+```
+
+## Figure 3B
+```{r }
+Orthology_Pieplot <- function(data,K){
+  data$Microbe <- factor(data$Microbe,levels = data$Microbe)
+  data$Y <- sapply(1:nrow(data),function(x) 100-(sum(data$Percent[1:x])-0.5*data$Percent[x]))
+  
+  pie <- ggplot(data,aes(0,Percent,fill=Microbe)) + 
+    theme_few() +
+    geom_segment(aes(x = 0.45,y = Y,xend = 0.52,yend = Y),linewidth=0.3) +
+    geom_bar(stat = "identity") +
+    scale_fill_aaas() +
+    scale_y_continuous(breaks = data$Y, labels = data$label) +
+    theme(plot.title = element_text(size = 15,face = "bold",hjust = 0.5),
+          panel.border = element_blank(),
+          legend.title = element_blank(),
+          legend.text = element_text(size = 12),
+          axis.title = element_blank(),
+          axis.text.x = element_text(size = 12),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank()) +
+    coord_polar(theta = "y") +
+    labs(title = K)
+
+  return(pie)
+}
+
+library(openxlsx)
+library(ggplot2)
+library(ggthemes)
+library(ggsci)
+
+data <- read.xlsx("Figure3_B_data.xlsx")
+data <- data[order(-data$Percent),]
+small <- which(data$Percent<1)
+if(length(small)>0){
+  data <- rbind(data[-small,],data.frame(Microbe="Others",Percent=100-sum(data$Percent[-small])))
+}
+if(nrow(data)>10){
+  data <- rbind(head(data,9),data.frame(Microbe="Others",Percent=100-sum(data$Percent[1:9])))
+}
+data$label <- paste0(round(data$Percent,2),"%")
+
+p <- Orthology_Pieplot(data = data,K = "K11358")
+print(p)
+```
+
+## Figure 3C
+```{r }
+LDA_Barplot <- function(res,filter=T,lda=2,color,font_family="Times"){
+  library(ggplot2)
+  library(ggthemes)
+  
+  if(filter){
+    res <- res[res$`LDAScore(log10)`>lda & res$Pvalue<0.05,]
+    if(nrow(res)==0) return(NULL)
+  }
+  
+  res <- head(res,50)
+  group <- intersect(names(color),unique(res$Group))
+  idx <- lapply(group, function(x) which(res$Group==x)) %>% unlist
+  res <- res[idx,]
+  
+  res$Description <- res[,ncol(res)-4]
+  str_l <- na.omit(nchar(res$Description)) %>% max
+  
+  res$Description <- factor(res$Description,levels = rev(res$Description))
+  res$log_P <- log(as.numeric(res$Pvalue),0.05)
+  res$Group <- factor(res$Group,levels = group)
+  res$Label <- ""
+  res$Label[res$`LDAScore(log10)`>lda & res$Pvalue<0.05] <- "*"
+  
+  p_bar <- ggplot(res,aes(Description,`LDAScore(log10)`,fill=Group)) + 
+    theme_hc(base_family = font_family) +
+    scale_fill_manual(values = as.character(color[group]),guide=guide_legend(ncol = 2)) + 
+    geom_bar(stat="identity",color="black",width=0.8) + 
+    theme(legend.position = "top",
+          legend.title = element_blank(),
+          panel.grid.major.x = element_line(colour = "darkgray",linetype = "dashed"),
+          panel.grid.major.y = element_blank(),
+          axis.ticks.y  = element_blank(),
+          axis.text.y = element_text(size=12)) +
+    labs(y="LDA SCORE(log 10)",x="")
+  
+  p_bar <- p_bar + geom_text(aes(label = Label),size = 13,hjust = -0.2,vjust = 0.7) +
+    scale_y_continuous(limits = c(0,max(res$`LDAScore(log10)`)*1.05))
+  p_bar <- p_bar + coord_flip()
+  
+  return(p_bar)
+}
+
+LEfSe_R <- function(Data,Groups,filter=T,exclude = NULL,Outdir,Label=NULL,Color,fontfamily="Times"){
+  library(microeco)
+  row.names(Groups) <- Groups$ID
+  feture <- Data[,Groups$ID]
+  row.names(feture) <- Data$ID
+  Anno <- Data[,!colnames(Data) %in% Groups$ID,drop=F]
+  row.names(Anno) <- Anno$ID
+  
+  dataset <- microtable$new(sample_table = Groups,otu_table = feture,tax_table = Anno[,"ID",drop=F])
+  lefse <- trans_diff$new(dataset = dataset, method = "lefse", group = "Groupings", boots = 100,
+                          alpha = 1, p_adjust_method = "none")
+  if(nrow(lefse$res_diff)==0) return(NULL)
+  LDAScore <- lefse$res_diff[,c("Taxa","Group","LDA","P.unadj")]
+  
+  Abun <- lefse$res_abund
+  Abun <- Abun[paste(Abun$Taxa,Abun$Group) %in% paste(LDAScore$Taxa,LDAScore$Group),c("Taxa","Mean")]
+  LDAScore <- merge(LDAScore,Abun,by = "Taxa")
+  LDAScore <- LDAScore[order(-LDAScore$LDA),]
+  LDAScore$Mean <- log(LDAScore$Mean*1000000,10)
+  LDAScore <- LDAScore[,c("Taxa","Mean","Group","LDA","P.unadj")]
+  colnames(LDAScore)[c(2,4,5)] <- c("Abun(log10)","LDAScore(log10)","Pvalue")
+  LDAScore <- cbind(Anno[LDAScore$Taxa,,drop=F],LDAScore[,-1])
+  
+  if(!is.null(exclude)){
+    LDAScore <- subset(LDAScore,!ID %in% exclude)
+  }
+  
+  bar <- LDA_Barplot(res = LDAScore,filter = filter,lda = 2,color = Color,font_family = fontfamily)
+  
+  LDAScore$`Abun(log10)` <- round(LDAScore$`Abun(log10)`, 2)
+  LDAScore$`LDAScore(log10)` <- round(LDAScore$`LDAScore(log10)`,2)
+  LDAScore$Pvalue <- round(LDAScore$Pvalue,3)
+  
+  return(list(LDAScore=LDAScore,bar=bar))
+}
+
+library(openxlsx)
+library(magrittr)
+
+Sampleinfo <- read.csv("Sampleinfo.csv")
+KOData <- read.xlsx("Figure3_C_data.xlsx")
+data <- read.xlsx("Figure3_B_data.xlsx")
+K <- "K11358"
+
+data <- data[order(-data$Percent),]
+Microbes <- head(data$Microbe,8)
+
+idx <- which(KOData$KO==K & KOData$Microbe %in% Microbes)
+kodata <- KOData[idx,c("Microbe",Sampleinfo$Microbiome_sampleID)]
+EX <- matrix(colSums(KOData[-idx,Sampleinfo$Microbiome_sampleID]),nrow = 1) %>% 
+  as.data.frame %>% cbind(Microbe="MetOrigin_ex",.)
+colnames(EX) <- colnames(kodata)
+kodata <- rbind(kodata,EX)
+colnames(kodata)[1] <- "ID"
+
+Groups <- Sampleinfo[,c("Microbiome_sampleID","Grouping")]
+colnames(Groups) <- c("ID","Groupings")
+
+res <- LEfSe_R(Data = kodata,Groups = Groups,filter = F,exclude = "MetOrigin_ex",
+               Color = structure(c("#BEBAB9","#C47070"),names=0:1))
+res$bar
+res$LDAScore
+```
+
+
+## Figure 3D
+```{r }
+Corr_Sankey <- function(Edges,Nodes,Width=1000,Height=1000,PadHeight=15){
+  id <- 0:(nrow(Nodes)-1)
+  names(id) <- row.names(Nodes)
+  
+  Links <- Edges[,c("from","to","color","value")]
+  Links$from <- id[Links$from]
+  Links$to <- id[Links$to]
+  
+  html <-
+    plot_ly(
+      type = "sankey",
+      orientation = "h",
+      valueformat = NULL,
+      valuesuffix = F,
+      width = Width,
+      height = Height,
+      
+      node = list(
+        label = Nodes$label,
+        color = Nodes$color,
+        pad = PadHeight,
+        thickness = 20,
+        line = list(
+          width = 0
+        ),
+        hoverlabel = list(
+          font = list(size=16)
+        )
+      ),
+      
+      link = list(
+        source = Links$from,
+        target = Links$to,
+        value = Links$value,
+        color = Links$color
+      )
+    ) %>%
+    layout(
+      font = list(
+        size = 18
+      ),
+      xaxis = list(showgrid = F, zeroline = F),
+      yaxis = list(showgrid = F, zeroline = F)
+      , margin = list(t=50,b=50,r=50)
+    ) %>%
+    config(
+      displayModeBar = T,
+      toImageButtonOptions = list(
+        format = "svg",
+        filename = 'sankey'
+      ),
+      modeBarButtons = list(list("toImage")),
+      displaylogo = F)
+  html
+}
+
+Mediate_Sankey <- function(micro_meta,meta_pheno,statPath="./",Level="genus",MetaFilter=NULL,
+                           Colors=c("#FF0000","#008000","#FF0000","#008000"),
+                           Width=1000,Height=1000,PadHeight=15){
+  # NodeHeight <- 6
+  # PadHeight <- 15
+  RColor <- c(colorRampPalette(c(Colors[4],"white"))(101),colorRampPalette(c("white",Colors[3]))(101)[-1])
+  names(RColor) <- -100:100
+  
+  if(!is.null(MetaFilter)){
+    micro_meta <- subset(micro_meta,Metabolite %in% MetaFilter)
+    meta_pheno <- subset(meta_pheno,Metabolite %in% MetaFilter)
+  }
+  colnames(micro_meta)[2:1] <- colnames(meta_pheno)[1:2] <- c("from","to")
+  
+  Edges <- rbind(micro_meta[,c("from","to","R")],
+                 meta_pheno[,c("from","to","R")])
+  Edges$color <- RColor[as.character(round(Edges$R*100))]
+  Edges$value <- 1
+  Edges <- rbind(Edges[,-3],
+                 data.frame(from="hide1",to=unique(micro_meta$from),color="white",value=0.01),
+                 data.frame(from=unique(meta_pheno$to),to="hide2",color="white",value=0.01))
+  
+
+  Nodes <- data.frame(label=unique(c(Edges$from,Edges$to)),color="darkgrey")
+  row.names(Nodes) <- Nodes$label
+  Nodes[c("hide1","hide2"),"label"] <- ""
+  Nodes[c("hide1","hide2"),"color"] <- "white"
+  
+  varList <- list()
+  for(tp in c(Level,"Metabolite","Phenotype")){
+    diff_result <- read.xlsx(file.path(statPath,paste0("Diff_Table_",tp,".xlsx"))) %>%
+      subset(.,Name %in% Nodes$label)
+    if(nrow(diff_result)>0){
+      varList[[tp]] <- diff_result$Name
+      diff_result$color <- "black"
+      if("FC" %in% colnames(diff_result)){
+        diff_result$color[diff_result$FC>1] <- Colors[1]
+        diff_result$color[diff_result$FC<1] <- Colors[2]
+      }else{
+        diff_result$color[diff_result$R>0] <- Colors[3]
+        diff_result$color[diff_result$R<0] <- Colors[4]
+      }
+      Nodes[diff_result$Name,"color"] <- diff_result$color
+    }
+  }
+  
+  html <- Corr_Sankey(Edges = Edges,Nodes = Nodes,Width = Width,Height = Height,PadHeight=PadHeight)
+  html
+}
+
+library(openxlsx)
+library(magrittr)
+library(plotly)
+
+micro_meta <- read.xlsx("Figure3_D_data1.xlsx")
+meta_pheno <- read.xlsx("Figure3_D_data2.xlsx")
+
+res <- Mediate_Sankey(micro_meta = micro_meta,meta_pheno = meta_pheno,Level =  "genus")
+res
+
+
+```
+
+
+## Figure 3E
+
+
+```{r }
+MediatePlot <- function(re,beta){
+  num_format <- function(x,cutoff=0.01){
+    X <- round(x,3)
+    absX <- abs(x)
+    if(any(absX<cutoff,na.rm = T)) X[which(absX<cutoff)] <- format(x[which(absX<cutoff)], digits=3,scientific = TRUE)
+    return(X)
+  }
+  
+  Format <- function(x){
+    X <- num_format(x)
+    paste0("beta = ",X[1],", P = ",X[2])
+  }
+  
+  pos <- data.frame(label=c(re$Microbe[1],re$Metabolite[1],re$Phenotype[1]),
+                    x=c(0,0.5,1),y=c(0,sqrt(0.75),0))
+  pos$xend <- pos$x[c(2,3,1)]
+  pos$yend <- pos$y[c(2,3,1)]
+  pos$texty <- c(-0.15,sqrt(0.75)+0.15,-0.15)
+  
+  w <- 0.08
+  d <- sqrt((2*w)^2-w^2)
+  arrow <- data.frame(x=c(d,0.5,1-d),y=c(w,sqrt(0.75)-2*w,w))
+  arrow$xend <- arrow$x[c(2,3,1)]
+  arrow$yend <- arrow$y[c(2,3,1)]
+  
+  Medi <- paste0(round(re$Estimate[3]*100),"%")
+  MediP <- paste0("P[medi]==",num_format(re$`p-value`[3]))
+  
+  Beta <- lapply(c("Micro_Meta","Meta_Pheno","Micro_Pheno"), function(x) beta[1,paste0(c("Beta","P")," (",x,")")])
+  BetaText <- sapply(Beta, Format)
+  BetaColor <- ifelse(sapply(Beta, "[", 2)<0.05,"black","#676565") %>% as.character
+  
+  P <- c(Beta[[1]][2],Beta[[2]][2],re$`p-value`[3]) %>% as.numeric
+  P[is.na(P)] <- 1
+  if(all(P<0.05)){
+    Color <- "#BB3E23"
+  }else{
+    Color <- "#676565"
+  }
+  
+  p <- ggplot(pos,aes(x,y)) + theme_tufte() + coord_fixed(ratio = 1) +
+    theme(text = element_blank(),axis.ticks = element_blank()) +
+    geom_segment(aes(xend=xend,yend=yend)) +
+    geom_line(data=arrow,linewidth=2,color=Color,
+              arrow = arrow(length=unit(0.40,"cm"))) +
+    geom_point(size = 8,color="white") +
+    geom_point(size = 5,shape = 21,fill="grey") +
+    annotate("text",x=0.5,y=0.38,label=Medi,color=Color,size=12)+
+    annotate("text",x=0.5,y=0.26,label=MediP,color=Color,size=6,parse=T)+
+    geom_text(aes(y=texty,label = label),size=5) + 
+    geom_text(aes(x=c(0.2,0.8,0.5),y=c(sqrt(0.75)/2,sqrt(0.75)/2,-0.04),label=BetaText),
+              color=BetaColor,angle=c(60,-60,0),size=4.5) +
+    scale_x_continuous(limits = c(-0.3,1.3)) +
+    scale_y_continuous(limits = c(-0.2,1.1))
+  p
+}
+
+Mediation <- function(Data,VarList){
+  NewName <- lapply(names(VarList), function(v) paste0(v,1:length(VarList[[v]]))) %>% unlist
+  NewNameSub <- structure(NewName,names=unlist(VarList))
+  NewNameSub_rev <- structure(unlist(VarList),names=NewName)
+  Data <- Data[,names(NewNameSub)]
+  colnames(Data) <- as.character(NewNameSub)
+  
+  Pairs <- lapply(NewNameSub[VarList$Metabolite], function(m){
+    lapply(NewNameSub[VarList$Microbiome], function(x) data.frame(X=x,M=m,Y=NewNameSub[VarList$Phenotype])) %>% do.call("rbind",.)
+  }) %>% do.call("rbind",.)
+  
+  ResultList <- lapply(1:nrow(Pairs), function(i){
+    library(mediation)
+    library(magrittr)
+    X <- formula(paste(Pairs$M[i],"~",Pairs$X[i]))
+    Y <- formula(paste(Pairs$Y[i],"~",Pairs$X[i],"+",Pairs$M[i]))
+    model_m <- lm(X,Data)
+    model_y <- lm(Y,Data)
+    model_m$call$formula <- X
+    model_y$call$formula <- Y
+    
+    set.seed(222)
+    result <- try(mediate(
+      model.m = model_m,
+      model.y = model_y,
+      treat = Pairs$X[i],
+      mediator = Pairs$M[i],
+      boot=T,sims=200,
+      boot.ci.type = "perc"))
+    if(class(result)!="mediate") return(NULL)
+    summ <- summary(result)
+    
+    Beta <- cbind(summary(result$model.m)$coefficients[2,c(1,4),drop=F],
+                  summary(result$model.y)$coefficients[3,c(1,4),drop=F],
+                  summary(result$model.y)$coefficients[2,c(1,4),drop=F],
+                  summary(lm(as.formula(paste(Pairs$Y[i],"~",Pairs$X[i])),Data))$coefficients[2,c(1,4),drop=F]) %>%
+      as.data.frame
+    colnames(Beta) <- lapply(c("Micro_Meta","Meta_Pheno","Micro_Pheno","Total_Effect"),function(x) paste0(c("Beta (","P ("),x,")")) %>% unlist
+    Beta <- cbind(ID=i,Microbe=NewNameSub_rev[Pairs$X[i]],Metabolite=NewNameSub_rev[Pairs$M[i]],Phenotype=NewNameSub_rev[Pairs$Y[i]],Beta)
+    
+    re <- lapply(c("d","z","n"), function(x){
+      summ[paste0(x,c("0","0.ci","0.p"))] %>% unlist
+    }) %>% do.call(rbind,.) %>% 
+      rbind(.,c(summ$tau.coef,as.numeric(summ$tau.ci),summ$tau.p))  %>% 
+      as.data.frame
+    colnames(re) <- c("Estimate","95% CI Lower","95% CI Upper","p-value")
+    re <- cbind(Name=c("ACME","ADE","Prop. Mediated","Total Effect"),re)
+    re <- cbind(ID=i,Microbe=NewNameSub_rev[Pairs$X[i]],Metabolite=NewNameSub_rev[Pairs$M[i]],Phenotype=NewNameSub_rev[Pairs$Y[i]], re)
+    return(list(Beta=Beta,re=re))
+  })
+  
+  BetaData <- lapply(ResultList, function(r) r$Beta) %>% do.call(rbind,.)
+  Result <- lapply(ResultList, function(r) r$re) %>% do.call(rbind,.)
+  
+  PlotList <- list()
+  for(i in 1:nrow(Pairs)){
+    re <- subset(Result,ID==i)
+    beta <- subset(BetaData,ID==i)
+    
+    PlotList[[i]] <- MediatePlot(re = re,beta = beta)
+  }
+  return(list(BetaData=BetaData,Result=Result,PlotList=PlotList))  
+}
+
+library(openxlsx)
+library(magrittr)
+library(ggplot2)
+library(ggthemes)
+
+Data <- read.xlsx("Figure3_E_data.xlsx")
+VarList <- list(Microbiome = "Clostridium",
+                Metabolite = "cystine",
+                Phenotype = "BMI-Zscore")
+
+model <- Mediation(Data = Data,VarList = VarList)
+model$BetaData
+model$Result
+model$PlotList[[1]]
+```
+

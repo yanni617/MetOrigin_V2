@@ -1,0 +1,209 @@
+---
+title: "Figure2"
+output: html_document
+date: "2024-10-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+## Figure 2C
+
+```{r }
+setwd("/home/xcfang/Software/metorigin2/code4imeta/Figure2")
+library(openxlsx)
+library(ggplot2)
+library(plotly)
+
+ReactionNum <- read.xlsx("Figure2_C_data.xlsx")
+ReactionNum$ID <- factor(ReactionNum$ID, levels = ReactionNum$ID)
+
+p <- ggplot(ReactionNum,aes(ID,MicroNum,PathwayName=PathwayName,ReactionName=ReactionName)) + 
+  geom_bar(stat = "identity",fill="#abebc6") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90,vjust = 0.5)) +
+  labs(x = "Pathway-Reaction",y = "Microbes Number") 
+p <- ggplotly(p)
+print(p)
+p
+```
+
+## Figure 2D
+
+```{r }
+color_opacity <- function(col,alpha=0.5){
+  library(gplots)
+  sapply(col, function(x){
+    colorRampPalette(c("white",x))(10)[round(alpha*10)]
+  }) %>% as.character
+}
+
+get_links <- function(Data,id){
+  pairs <- paste(Data[,1],Data[,2],sep = "@")
+  l <- table(pairs)
+  Type <- names(l)
+  n <- strsplit(Type,"@")
+  source <- as.numeric(id[sapply(n, function(x)x[1])])
+  target <- as.numeric(id[sapply(n, function(x)x[2])])
+  
+  if(colnames(Data)[2] %in% c("SubstrateName","ProductName","Meta")){
+    Type <- sapply(strsplit(Type," [(]"),function(x) x[1])
+  }
+  link <- data.frame(source,target,value=as.numeric(l),type=Type)
+  return(link)
+}
+
+SplitDupData <- function(data,column,pat){
+  for(cc in column){
+    if(length(grep(pat,data[,cc]))>0){
+      split_list <- strsplit(data[,cc],pat)
+      new_index <- rep(1:nrow(data),sapply(split_list,length))
+      data <- data[new_index,]
+      data[,cc] <- unlist(split_list)
+      row.names(data) <- NULL
+    }
+  }
+  return(data)
+}
+
+plotSankey <- function(CPD,rn_in_all_bacteria,Level,ID,title,Output_Dir,Type,
+                       Colors=c("#FF0000","#008000","#FF0000","#008000"),
+                       diff_pvalue_cutoff_meta = 0.05,diff_pvalue_cutoff_micro = 0.05,corr_pvalue_cutoff = 0.05,
+                       width=1200,height=800,r.margin=100,padding=8){
+  Level <- intersect(c("phylum","class","order","family","genus","species","strain"),Level)
+  linked_level <- tail(Level,1)
+  
+  PlotData <- rn_in_all_bacteria[,c(Level,"SubstrateName","ProductName","Enzyme")]
+  if(nrow(PlotData)==0) return(NULL)
+  
+  PlotData <- SplitDupData(PlotData,c("SubstrateName","ProductName"),"; ")
+  for(n in 1:length(Level)){
+    if(Level[n]!="strain") PlotData[,n] <- paste0(substr(colnames(PlotData)[n],1,1),"_",PlotData[,n])
+  }
+  bacnodes <- lapply(1:length(Level), function(x){
+    unique(PlotData[,x])
+  }) %>% unlist %>% unique
+  cpdnodes <- lapply(c("Enzyme","SubstrateName","ProductName"), function(x){
+    unique(PlotData[,x])
+  }) %>% unlist %>% unique
+  
+  e <- PlotData$Enzyme %>% unique %>% .[.!=""]
+  s <- PlotData$SubstrateName %>% unique
+  p <- PlotData$ProductName  %>% unique
+  
+  nodes <- c(bacnodes,cpdnodes,rep(NA,3))
+  Nodes <- data.frame(name=nodes,color="black")
+  row.names(Nodes) <- c(Nodes$name[1:(nrow(Nodes)-3)],"Enzyme","Substrate","Product")
+  
+  getPalette <- colorRampPalette(c(brewer.pal(8, "Spectral"),brewer.pal(9, "Set1")))
+  Nodes$color <- sample(getPalette(length(nodes)*2))[1:length(nodes)]
+  Nodes[as.character(Nodes$name) %in% s,"color"] <- "#FF0000"
+  Nodes[as.character(Nodes$name) %in% p,"color"] <- "#008000"
+  Nodes[e,"color"] <- "purple"
+  Nodes[c("Enzyme","Substrate","Product"),"color"] <- "white"
+  
+  id <- 0:(nrow(Nodes)-1)
+  names(id) <- row.names(Nodes)
+  
+  Links <- NULL
+  for(n in 1:(length(Level)-1)){
+    links <- get_links(PlotData[,n:(n+1)],id)
+    Links <- rbind(Links,links)
+  }
+  for(x in c("Enzyme","SubstrateName","ProductName")){
+    links <- get_links(PlotData[,c(linked_level,x)],id)
+    links$value <- links$value/3
+    Links <- rbind(Links,links)
+  }
+  Links$color <- "#E4E5E9"
+  hide_no <- c(length(e),length(s),length(p))
+  Last <- data.frame(source=id[c(e,s,p)],
+                     target=id[rep(c("Enzyme","Substrate","Product"),hide_no)],
+                     value=rep(c(0.03,0.02,0.01),hide_no),type="hide",color="white")
+  Links <- rbind(Links,Last)
+  
+  html <-
+    plot_ly(
+      type = "sankey",
+      orientation = "h",
+      valueformat = NULL,
+      valuesuffix = F,
+      width = width,
+      height = height,
+      arrangement = "freeform",
+      
+      node = list(
+        label = Nodes$name,
+        color = Nodes$color,
+        pad = padding,  # node 间距
+        thickness = 15, # node 宽度
+        line = list(
+          width = 0,
+          color = "white"
+        ),
+        hoverlabel = list(
+          font = list(size=10)
+        )
+      ),
+      
+      link = list(
+        source = Links$source,
+        target = Links$target,
+        value =  Links$value,
+        color = Links$color
+      )
+    ) %>% 
+    layout(
+      title = title,
+      font = list(
+        size = 12
+      ),
+      xaxis = list(showgrid = F, zeroline = F),
+      yaxis = list(showgrid = F, zeroline = F)
+      , margin = list(t=50,b=50,r=r.margin)
+    ) %>%
+    config(
+      displayModeBar = T,
+      toImageButtonOptions = list(
+        format = "svg",
+        filename = ID
+      ),
+      modeBarButtons = list(list("toImage")),
+      displaylogo = F)
+  
+  html
+}
+
+Quick_Search_Sankey <- function(Table,ReactionID,ReactionName,Levels=c("phylum","class"),
+                                Width=1200,Height=800,Margin=100,Padding=8){
+  Table <- SplitDupData(Table,"Enzyme","; ")
+  
+  res <- plotSankey(rn_in_all_bacteria = Table,Level = Levels,ID = ReactionID,
+                    title = ReactionName,Output_Dir = Output_Dir,
+                    width = Width,height = Height,r.margin = Margin,padding = Padding)
+  
+  res
+}
+
+
+library(openxlsx)
+library(magrittr)
+library(RColorBrewer)
+library(plotly)
+
+Table2 <- read.xlsx("Figure2_D_data.xlsx")
+Quick_Search_Sankey(Table = Table2,
+                    ReactionID = "ko00620-R00316",
+                    ReactionName = "ko00620: Pyruvate metabolism\nR00316: ATP:acetate adenylyltransferase",
+                    Levels = c("phylum","class","order"))
+
+```
+
