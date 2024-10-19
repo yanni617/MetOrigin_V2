@@ -17,7 +17,6 @@ When you click the **Knit** button a document will be generated that includes bo
 ## Figure 2C
 
 ```{r }
-setwd("/home/xcfang/Software/metorigin2/code4imeta/Figure2")
 library(openxlsx)
 library(ggplot2)
 library(plotly)
